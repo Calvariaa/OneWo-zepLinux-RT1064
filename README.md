@@ -4,7 +4,7 @@ Implementing a Linux-compatible interface layer on Zephyr RTOS, enabling Linux a
 
 ## Latest Release: v0.6
 
-**OneWo zepLinux v0.6** was released on **September 9, 2026**. This release focuses on the per-process signal mechanism, keyboard interrupt handling, job control, and VFS ramfs integration. The v0.6 release content corresponds to commit `da6e7f4e` on the `main` branch, and all related functional code has been merged.
+**OneWo zepLinux v0.6** was released. This release focuses on the per-process signal mechanism, keyboard interrupt handling, job control, and VFS ramfs integration. The v0.6 release content corresponds to commit `da6e7f4e` on the `main` branch, and all related functional code has been merged.
 
 ### Per-Process Signal Mechanism and Keyboard Interrupts
 
