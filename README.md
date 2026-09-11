@@ -2,46 +2,45 @@
 
 Implementing a Linux-compatible interface layer on Zephyr RTOS, enabling Linux applications to run on ARM Cortex-M4 and ANSILIC RISC-V 32 microcontrollers with minimal modifications.
 
-## Latest Release: v0.5
+## Latest Release: v0.6
 
-**OneWo zepLinux v0.5** was released on **July 14, 2026**. This release focuses on AS32X601 serial dynamic upload, automatic PC-side upload, and the Linux-style process model. The v0.5 release content corresponds to commit `2184fc64` on the `main` branch, and all related functional code has been merged.
+**OneWo zepLinux v0.6** was released on **September 9, 2026**. This release focuses on the per-process signal mechanism, keyboard interrupt handling, job control, and VFS ramfs integration. The v0.6 release content corresponds to commit `da6e7f4e` on the `main` branch, and all related functional code has been merged.
 
-### Serial Dynamic Upload and PC Upload Tools
-
-Release contents:
-
-- Completed the bytecode program workflow for serial upload, parsing, storage, lookup, execution, and deletion.
-- Added a PC-side Python script for automatic upload and the accompanying example programs.
-- Added documentation for the upload tools and bytecode instructions.
-- Added bytecode example programs.
-
-Test validation:
-
-- The `upload_hex` command correctly parses and loads hexadecimal bytecode.
-- Invalid characters, incomplete bytes, empty programs, and oversized programs are detected and rejected.
-- The PC-side script automatically uploads `.bin` files and displays the loader result.
-- Uploaded programs can be managed normally through the `ls`, `run`, and `rm` commands.
-
-### Linux-Style Process Model
+### Per-Process Signal Mechanism and Keyboard Interrupts
 
 Release contents:
 
-- Integrated an MCU-oriented Embox-style process model into the Zephyr kernel.
-- Added process creation, PID allocation and lookup, parent-child relationships, process exit, resource cleanup, and process fork support.
-- Added per-process file descriptor tables with fixed-size allocation, descriptor lookup/removal, and `CLOEXEC` support.
-- Added per-process environment variables with lookup, update, fork-time deep copy, and automatic cleanup on exit.
-- Added process-thread association, including current-process lookup and thread registration/unregistration.
-- Added automatic initialization of the PID 1 init process and integrated `getpid()` with the actual current process.
-- Fixed process and thread stack allocation and cleanup issues.
+- Replaced global event broadcast with a per-process signal delivery model, closely following the Linux signal model.
+- Added per-process signal state tracking, including pending signals, blocked signal masks, and custom signal handlers.
+- Added foreground/background process group management and targeted signal delivery via `kill()`.
+- Implemented `signal()`, `sigblock()`, and `sigunblock()` with POSIX-compatible `SIGINT`, `SIGTERM`, and related constants.
+- Added Ctrl+C keyboard interrupt support for both AS32x601 and RocketPi shells: pressing Ctrl+C sends `SIGINT` to the foreground process only and is consumed rather than echoed to the input buffer.
 
 Test validation:
 
-- Verified process creation and PID allocation.
-- Verified parent-child process relationships.
-- Verified file descriptor table operations and environment-variable management.
-- Verified process fork and resource-copy behavior.
-- Verified POSIX `getpid()` integration.
-- Verified the AS32X601 process model sample and process-management commands, including `ps`, `getpid`, `info`, and `kill`.
+- Verified that `kill()` delivers a signal to the targeted process without affecting other running processes.
+- Verified custom signal handler registration and invocation via `signal()`.
+- Verified that Ctrl+C interrupts a running foreground process on AS32x601 EVB and RocketPi hardware.
+- Verified signal blocking and unblocking with `sigblock()`/`sigunblock()`.
+- Verified POSIX `kill`, `signal`, `SIGINT`, and `SIGTERM` behavior in the AS32x601 shell environment.
+
+### Job Control and VFS Integration
+
+Release contents:
+
+- Ported complete job control (Ctrl+D suspend/resume) from QEMU Cortex-M3 to both AS32x601 EVB and RocketPi.
+- Added `SIGSTOP`/`SIGCONT` signal delivery for suspending and resuming foreground processes via Ctrl+D.
+- Added VFS ramfs support to both `rocket_pi_shell_process` and `as32x601_shell_process` samples, enabled via `CONFIG_VFS_CORE=y` and `CONFIG_RAMFS=y`.
+- Added `vfs_commands.c` mounting ramfs at `/tmp` through `SYS_INIT` at application level, and wired up `ls`, `mkdir`, and `cat` shell commands against the VFS layer.
+- Fixed ramfs driver initialization ordering, resolved `EEXIST` handling, raised `MAX_COMMANDS` limits, and corrected `ls` argument count handling on AS32x601.
+
+Test validation:
+
+- Verified Ctrl+D suspends the foreground process and returns the shell prompt on AS32x601 EVB and RocketPi.
+- Verified that a suspended process can be resumed and continues execution correctly.
+- Verified `mkdir /tmp/dir`, `cat /tmp/file`, and `ls /tmp` operate correctly against the ramfs mount point on both boards.
+- Verified that remounting an already-existing path returns gracefully without crashing.
+- Verified that AS32x601 `ls` correctly handles zero and one path arguments after the argument-count fix.
 
 ## Core Highlights
 
@@ -71,7 +70,7 @@ OneWo-zepLinux/
 │   ├── zephyr-linux-build-and-dev.zh.md
 │   ├── zephyr-linux-interface-definition.zh.md
 │   ├── zepLinux-interface-and-validation.zh.md
-│   └── test-demos/                 # 
+│   └── test-demos/                 #
 ├── modules/
 │   └── hal/
 │       ├── ansilic/                # ANSILIC RISC-V 32 HAL
@@ -118,6 +117,52 @@ Enabled through the `CONFIG_SCHED_LINUX` Kconfig option, serving as Zephyr's 4th
 | RT | SCHED_FIFO / SCHED_RR | Priority 1-99 bitmap | FIFO no timeslice, RR 10 tick round-robin |
 | CFS | SCHED_NORMAL | vruntime ascending | nice -20..19 weight table, fair allocation |
 | Idle | SCHED_IDLE | — | Zephyr idle thread fallback |
+
+## Per-Process Signal Architecture
+
+Each process carries its own `signal_state` — pending set, blocked mask, and handler table — so signals are delivered to a specific process rather than broadcast globally.
+
+```
+  Keyboard Input                        Explicit kill()
+  ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────┐
+  │  Ctrl+C (UART)   │  │  Ctrl+D (UART)     │  │  kill(pid, sig)  │
+  │  → SIGINT        │  │  → SIGSTOP/SIGCONT │  │  (shell command) │
+  └────────┬─────────┘  └─────────┬──────────┘  └────────┬─────────┘
+           │                   │                        │
+           └───────────────────┴────────────────────────┘
+                               │
+                               ▼
+  ┌─────────────────────────────────────────────┐
+  │              Signal Delivery                │
+  │  resolve foreground PID (process group)     │
+  │  look up z_process via pid_table[]          │
+  └─────────────────────┬───────────────────────┘
+                        │
+                        ▼
+  ┌─────────────────────────────────────────────┐
+  │           z_process.signal_state            │
+  │  ┌─────────────────┬─────────────────────┐  │
+  │  │  pending_mask   │   blocked_mask      │  │
+  │  ├─────────────────┴─────────────────────┤  │
+  │  │  handlers[]                           │  │
+  │  │    SIGINT  → fn / SIG_DFL / SIG_IGN   │  │
+  │  │    SIGTERM → fn / SIG_DFL / SIG_IGN   │  │
+  │  │    SIGSTOP → suspend (job control)    │  │
+  │  │    SIGCONT → resume  (job control)    │  │
+  │  └───────────────────────────────────────┘  │
+  └─────────────────────┬───────────────────────┘
+                        │ signal not in blocked_mask?
+                        ▼
+  ┌─────────────────────────────────────────────┐
+  │              Handler Dispatch               │
+  │  SIG_DFL  →  default action (terminate /    │
+  │               suspend / ignore by signal)   │
+  │  SIG_IGN  →  discard silently               │
+  │  fn ptr   →  call registered handler        │
+  └─────────────────────────────────────────────┘
+```
+
+Only the targeted process receives the signal; other processes running concurrently are unaffected.
 
 ## Modified Zephyr Kernel Files
 
