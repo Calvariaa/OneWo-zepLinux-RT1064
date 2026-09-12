@@ -1,0 +1,15 @@
+sample:
+  description: i.MX RT1064 Shell with Process Support, Signals and SD card commands
+  name: RT1064 Shell Process
+common:
+  tags: shell process signal sd
+  platform_allow: mimxrt1064_evk
+  integration_platforms:
+    - mimxrt1064_evk
+  harness: console
+  harness_config:
+    type: multi_line
+    ordered: false
+    regex:
+      - "Shell with Process Support"
+      - "Init process PID:"

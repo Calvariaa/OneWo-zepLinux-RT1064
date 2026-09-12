@@ -1,0 +1,57 @@
+/*
+ * Devicetree overlay for the MIMXRT1064-xVL CoreBoard V1.6.
+ *
+ * Zephyr applies <application>/boards/<board>.overlay automatically when
+ * building for that board, so this file is inert for every other target.
+ *
+ * The board carries the same i.MX RT1064 as the NXP EVK and wires USDHC1 to its
+ * microSD socket on the same SD_B0 pads, but two things differ from the EVK.
+ *
+ * 1. SD card power (J3)
+ *    The EVK drives a switch on pad GPIO1_19. On this board that pad is not
+ *    connected; the socket supply is switched by an AO3401 P-channel MOSFET
+ *    (high-side: source to 3V3, drain to the card, gate to the MCU) whose gate
+ *    is pad B1_07 = GPIO2_IO23, the net the J3 "SD auto re-power" jumper sits
+ *    on.
+ *
+ *    POLARITY MATTERS. A P-channel high-side switch conducts when its gate is
+ *    pulled LOW and is off when the gate sits at 3V3. imx_usdhc writes logical
+ *    values through gpio_pin_set_dt (set(0) = power off, set(1) = power on), so
+ *    the line must be declared GPIO_ACTIVE_LOW for set(1) to actually power the
+ *    card. Copying the EVK's GPIO_ACTIVE_HIGH leaves the MOSFET off, which
+ *    looks exactly like a missing card.
+ *
+ * 2. Card detect
+ *    The EVK detects on GPIO2_28 (pad B1_12). This board uses pad
+ *    GPIO_SD_B1_04, the SD1 pin group's dedicated USDHC1_CD_B line, i.e.
+ *    GPIO3_IO04. A 10K pull-up holds it high and the socket switch shorts it to
+ *    ground when a card is seated, so it is active low.
+ *
+ *    cd-gpios only names the line - the pad still has to be muxed to GPIO. The
+ *    EVK does that inside pinmux_usdhc1/group1 (which drives the wrong pad
+ *    here), so a group for SD_B1_04 is added below and appended to pinctrl-0.
+ */
+
+&usdhc1 {
+	pwr-gpios = <&gpio2 23 GPIO_ACTIVE_LOW>;
+	cd-gpios  = <&gpio3 4  GPIO_ACTIVE_LOW>;
+
+	pinctrl-0 = <&pinmux_usdhc1>, <&pinmux_usdhc1_cd>;
+};
+
+&iomuxc {
+	/* Pinmux groups live under the iomuxc node's `pinctrl` child. */
+	pinctrl {
+		pinmux_usdhc1_cd: pinmux_usdhc1_cd {
+			group0 {
+				pinmux = <&iomuxc_gpio_sd_b1_04_gpio3_io04>;
+				/* External 10K pull-up is fitted; keep the line
+				 * defined when no card is present.
+				 */
+				bias-pull-up;
+				drive-strength = "r0";
+				slew-rate = "slow";
+			};
+		};
+	};
+};
